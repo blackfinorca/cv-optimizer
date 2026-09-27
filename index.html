@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CV Optimizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #e9e6df; --panel: #ffffff; --paper: #ffffff; --ink: #1d1c1a; --muted: #6b6760;
+    --line: #dedad2; --accent: #1f5f5b; --accent-ink: #ffffff;
+    --old-bg: #ffe08a; --del-bg: #fbe0dc; --del-ink: #9a2a1f; --ins-bg: #d4efda; --ins-ink: #1c6b33;
+    --pending: #e0a030; --accepted: #2f8f4e; --rejected: #9b968d; --edited: #2f6fb0;
+    --radius: 8px; --gap: 16px; --rail: 300px; --page-gap: 14px;
+  }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 "IBM Plex Sans", system-ui, sans-serif; }
+  .app { display: grid; grid-template-columns: 300px 1fr; gap: var(--gap); padding: var(--gap); }
+  .app.collapsed { grid-template-columns: 1fr; }
+  .app.collapsed aside { display: none; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; } }
+
+  aside { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--gap); align-self: start; position: sticky; top: var(--gap); display: grid; gap: 14px; }
+  @media (max-width: 860px) { aside { position: static; } }
+  h1 { font: 600 20px/1.2 "Newsreader", serif; margin: 0; }
+  label { display: grid; gap: 4px; font-weight: 500; font-size: 13px; }
+  input[type=password], select, textarea { font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: #fff; color: var(--ink); width: 100%; box-sizing: border-box; }
+  textarea { resize: vertical; }
+  .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+  button { font: inherit; font-weight: 500; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { font-size: 13px; color: var(--muted); min-height: 1.5em; }
+  .status.error { color: var(--del-ink); }
+
+  main { display: grid; gap: var(--gap); align-content: start; min-width: 0; }
+  .toolbar { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .toolbar .counts { flex: 1; color: var(--muted); font-size: 13px; min-width: 200px; }
+  .summary { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 12px 16px; }
+  .summary p { margin: 0; }
+
+  /* Review area: A4 page + comment rail, like Word's review pane */
+  .review { position: relative; display: grid; grid-template-columns: minmax(0, 794px) var(--rail); gap: 36px; justify-content: center; }
+  .review.inline { grid-template-columns: minmax(0, 794px); }
+  .review.inline .rail { display: none; }
+  .links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .links path { fill: none; stroke-width: 1.5; }
+  .rail { position: relative; }
+
+  /* 794px = 210mm at 96dpi, so pt sizes match print. Page breaks are an approximation of Word's. */
+  .paper {
+    --page-h: 1123px;
+    box-sizing: border-box; padding: 9.5%; min-height: var(--page-h);
+    font: 11pt/1.4 Calibri, Carlito, Arial, sans-serif; overflow-wrap: anywhere;
+    background: repeating-linear-gradient(to bottom, var(--paper) 0, var(--paper) calc(var(--page-h) - var(--page-gap)), var(--bg) calc(var(--page-h) - var(--page-gap)), var(--bg) var(--page-h));
+  }
+  .empty { color: var(--muted); text-align: center; padding: 60px 0; font-family: "IBM Plex Sans", sans-serif; }
+  .para { margin: 0 0 5px; white-space: pre-wrap; position: relative; min-height: 1em; }
+  .para.heading { font-weight: 700; font-size: 1.25em; margin-top: 14px; }
+  .para.bullet { padding-left: 18px; }
+  .para.bullet::before { content: "•"; position: absolute; left: 4px; }
+  .para.changed { cursor: pointer; border-radius: 3px; }
+  .para.changed.active { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .para .badge { position: absolute; left: -30px; top: 1px; }
+  .para.bullet .badge { left: -30px; }
+  .hl-old { background: var(--old-bg); border-bottom: 2px solid var(--pending); }
+  .hl-new { background: var(--ins-bg); border-bottom: 2px solid var(--accepted); }
+  .para.edited .hl-new { background: #dbe8f6; border-bottom-color: var(--edited); }
+  .para.rejected { text-decoration: underline dotted var(--rejected); }
+  .caret { display: inline-block; width: 0; height: 1em; border-left: 2px solid var(--pending); margin: 0 1px; vertical-align: -2px; position: relative; }
+  .caret::after { content: ""; position: absolute; left: -5px; top: -5px; border: 4px solid transparent; border-top-color: var(--pending); }
+
+  .badge { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font: 600 11px/1 "IBM Plex Sans", sans-serif; color: #fff; background: var(--pending); }
+  .accepted .badge { background: var(--accepted); }
+  .rejected .badge { background: var(--rejected); }
+  .edited .badge { background: var(--edited); }
+
+  .callout { position: absolute; left: 0; right: 0; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--pending); border-radius: 6px; padding: 9px 11px; box-shadow: 0 1px 4px rgba(0,0,0,.08); font-size: 13px; transition: top .15s; }
+  .callout.inline { position: static; margin: 6px 0 12px; font-family: "IBM Plex Sans", sans-serif; font-size: 13px; white-space: normal; }
+  .callout.accepted { border-left-color: var(--accepted); }
+  .callout.rejected { border-left-color: var(--rejected); opacity: .8; }
+  .callout.edited { border-left-color: var(--edited); }
+  .callout.active { box-shadow: 0 0 0 2px var(--accent), 0 4px 12px rgba(0,0,0,.12); }
+  .c-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .c-head .tag { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 10px; color: var(--muted); }
+  .c-head .state { margin-left: auto; font-size: 11px; color: var(--muted); }
+  .c-label { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+  .c-text { white-space: pre-wrap; line-height: 1.45; }
+  .c-text del { background: var(--del-bg); color: var(--del-ink); }
+  .c-text ins { background: var(--ins-bg); color: var(--ins-ink); text-decoration: none; }
+  .c-reason { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .c-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .c-actions button { padding: 2px 10px; font-size: 12px; }
+  .callout textarea { font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside>
+    <h1>CV Optimizer</h1>
+    <label>Anthropic API key
+      <input id="apiKey" type="password" placeholder="sk-ant-..." autocomplete="off">
+      <span class="hint">Stored only in this browser.</span>
+    </label>
+    <label>Model
+      <select id="model">
+        <option value="claude-opus-5">Claude Opus 5</option>
+        <option value="claude-opus-5-5">Claude Opus 5.5</option>
+      </select>
+    </label>
+    <label>Your CV (.docx)
+      <input id="cvFile" type="file" accept=".docx,.doc">
+      <span class="hint" id="cvName">Upload once — it is remembered in this browser.</span>
+    </label>
+    <label>Job description
+      <textarea id="jd" rows="10" placeholder="Paste the job ad here"></textarea>
+    </label>
+    <label>Extra instructions <span class="hint">(optional)</span>
+      <textarea id="extra" rows="2" placeholder="e.g. emphasise team leadership, keep it to British English"></textarea>
+    </label>
+    <button id="analyze" class="primary">Suggest changes</button>
+    <div id="status" class="status"></div>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button id="toggleInputs">Hide inputs</button>
+      <span class="counts" id="counts">No suggestions yet.</span>
+      <button id="acceptAll" disabled>Accept all pending</button>
+      <button id="download" class="primary" disabled>Download .docx</button>
+    </div>
+    <div class="summary" id="summary" hidden><p id="summaryText"></p></div>
+    <div class="review" id="review">
+      <svg class="links" id="links" aria-hidden="true"></svg>
+      <div class="paper" id="paper"><div class="empty">Upload your CV to see it here.</div></div>
+      <div class="rail" id="rail"></div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script type="module">
+import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm";
+
+const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const XML_NS = "http://www.w3.org/XML/1998/namespace";
+const STORE = { key: "cvt.apiKey", model: "cvt.model", cv: "cvt.cvBase64", cvName: "cvt.cvName" };
+const A4_RATIO = 297 / 210;
+const STATUS_COLOR = { pending: "--pending", accepted: "--accepted", rejected: "--rejected", edited: "--edited" };
+const $ = (id) => document.getElementById(id);
+const narrow = matchMedia("(max-width: 1180px)");
+
+// ---------- persistence (per-browser convenience only) ----------
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+};
+
+// ---------- state ----------
+let zip = null;          // JSZip of the uploaded .docx
+let xmlDoc = null;       // parsed word/document.xml
+let paragraphs = [];     // [{ el, text, chars: [{ch,b,i,sz,run}], kind, align, locked }]
+let changes = new Map(); // paragraph index -> { suggested, reason, type, status, final, editing }
+let activeIndex = null;
+
+// ---------- .docx parsing ----------
+function childW(node, name) {
+  for (const c of node.childNodes) if (c.nodeType === 1 && c.namespaceURI === W && c.localName === name) return c;
+  return null;
+}
+
+function isInsideSkipped(p) {
+  for (let n = p.parentNode; n; n = n.parentNode) {
+    if (n.namespaceURI === W && n.localName === "txbxContent") return true;
+    if (n.namespaceURI === MC && n.localName === "AlternateContent") return true;
+  }
+  return false;
+}
+
+function runStyle(r) {
+  const rPr = childW(r, "rPr");
+  const on = (tag) => { const e = rPr && childW(rPr, tag); return !!e && !["0", "false"].includes(e.getAttributeNS(W, "val")); };
+  const sz = rPr && childW(rPr, "sz")?.getAttributeNS(W, "val");
+  return { b: on("b"), i: on("i"), sz: sz ? Number(sz) / 2 : null, run: r };
+}
+
+function collectSegments(node, style, out) {
+  for (const c of node.childNodes) {
+    if (c.nodeType !== 1 || c.namespaceURI === MC) continue; // MC = drawings / text boxes
+    if (c.namespaceURI !== W) { collectSegments(c, style, out); continue; }
+    switch (c.localName) {
+      case "r": collectSegments(c, runStyle(c), out); break;
+      case "t": out.push({ text: c.textContent, ...style }); break;
+      case "tab": out.push({ text: "\t", ...style }); break;
+      case "br": case "cr": out.push({ text: "\n", ...style }); break;
+      case "noBreakHyphen": out.push({ text: "-", ...style }); break;
+      case "p": case "txbxContent": case "pPr": case "rPr": case "delText": case "del": break;
+      default: collectSegments(c, style, out);
+    }
+  }
+  return out;
+}
+
+// Paragraphs holding images, fields or text boxes are shown but never rewritten,
+// because replacing their runs would destroy that content.
+function hasUnsafeContent(p) {
+  const tags = ["drawing", "pict", "object", "fldChar", "instrText", "fldSimple"];
+  if (tags.some((t) => p.getElementsByTagNameNS(W, t).length)) return true;
+  return p.getElementsByTagNameNS(MC, "AlternateContent").length > 0;
+}
+
+function readParagraph(el) {
+  const plain = { b: false, i: false, sz: null, run: null };
+  const chars = collectSegments(el, plain, []).flatMap((s) => s.text.split("").map((ch) => ({ ch, b: s.b, i: s.i, sz: s.sz, run: s.run })));
+  const pPr = childW(el, "pPr");
+  const style = pPr && childW(pPr, "pStyle")?.getAttributeNS(W, "val") || "";
+  const jc = pPr && childW(pPr, "jc")?.getAttributeNS(W, "val");
+  const kind = /heading|title/i.test(style) ? "heading"
+    : (pPr && childW(pPr, "numPr")) || /list/i.test(style) ? "bullet" : "normal";
+  return {
+    el, chars, kind, locked: hasUnsafeContent(el),
+    text: chars.map((c) => c.ch).join(""),
+    align: { center: "center", right: "right", end: "right", both: "justify" }[jc] || "",
+  };
+}
+
+async function applyDocDefaults() {
+  const xml = await zip.file("word/styles.xml")?.async("string");
+  const d = xml && new DOMParser().parseFromString(xml, "application/xml");
+  const rPr = d?.getElementsByTagNameNS(W, "rPrDefault")[0];
+  const font = rPr?.getElementsByTagNameNS(W, "rFonts")[0]?.getAttributeNS(W, "ascii");
+  const sz = rPr?.getElementsByTagNameNS(W, "sz")[0]?.getAttributeNS(W, "val");
+  $("paper").style.fontFamily = font ? `"${font}", Calibri, Carlito, Arial, sans-serif` : "";
+  $("paper").style.fontSize = sz ? `${Number(sz) / 2}pt` : "";
+}
+
+async function loadDocx(arrayBuffer) {
+  const head = new Uint8Array(arrayBuffer.slice(0, 4));
+  if (head[0] === 0xd0 && head[1] === 0xcf) {
+    throw new Error("This is an old binary .doc file. Open it in Word and use Save As → Word Document (.docx), then upload that.");
+  }
+  zip = await JSZip.loadAsync(arrayBuffer);
+  const xml = await zip.file("word/document.xml")?.async("string");
+  if (!xml) throw new Error("Could not find word/document.xml — is this a valid .docx?");
+  xmlDoc = new DOMParser().parseFromString(xml, "application/xml");
+  paragraphs = [...xmlDoc.getElementsByTagNameNS(W, "p")].filter((p) => !isInsideSkipped(p)).map(readParagraph);
+  changes = new Map();
+  activeIndex = null;
+  $("summary").hidden = true;
+  await applyDocDefaults();
+  render();
+}
+
+// ---------- .docx writing ----------
+function makeRun(sourceRun, text) {
+  const run = xmlDoc.createElementNS(W, "w:r");
+  const rPr = sourceRun && childW(sourceRun, "rPr");
+  if (rPr) run.appendChild(xmlDoc.importNode(rPr, true));
+  text.split(/(\t|\n)/).forEach((part) => {
+    if (part === "\t") run.appendChild(xmlDoc.createElementNS(W, "w:tab"));
+    else if (part === "\n") run.appendChild(xmlDoc.createElementNS(W, "w:br"));
+    else if (part) {
+      const t = xmlDoc.createElementNS(W, "w:t");
+      t.setAttributeNS(XML_NS, "xml:space", "preserve");
+      t.textContent = part;
+      run.appendChild(t);
+    }
+  });
+  return run;
+}
+
+// Replaces the paragraph's runs, keeping paragraph properties (bullets, style, spacing).
+function setParagraphChars(p, chars) {
+  const keep = new Set(["pPr", "bookmarkStart", "bookmarkEnd"]);
+  for (const c of [...p.childNodes]) {
+    if (!(c.nodeType === 1 && c.namespaceURI === W && keep.has(c.localName))) p.removeChild(c);
+  }
+  for (let i = 0; i < chars.length;) {
+    let j = i + 1;
+    while (j < chars.length && chars[j].run === chars[i].run) j++;
+    p.appendChild(makeRun(chars[i].run, chars.slice(i, j).map((c) => c.ch).join("")));
+    i = j;
+  }
+}
+
+async function buildDocx() {
+  // Work on a copy so the on-screen original stays intact for further review.
+  const originalXml = new XMLSerializer().serializeToString(xmlDoc);
+  try {
+    for (const [i, c] of changes) {
+      if (c.status === "accepted" || c.status === "edited") setParagraphChars(paragraphs[i].el, carryStyles(paragraphs[i].chars, c.final));
+    }
+    let xml = new XMLSerializer().serializeToString(xmlDoc);
+    if (!xml.startsWith("<?xml")) xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml;
+    zip.file("word/document.xml", xml);
+    return await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  } finally {
+    xmlDoc = new DOMParser().parseFromString(originalXml, "application/xml");
+    const fresh = [...xmlDoc.getElementsByTagNameNS(W, "p")].filter((p) => !isInsideSkipped(p));
+    paragraphs.forEach((para, i) => { para.el = fresh[i]; });
+  }
+}
+
+// ---------- word diff (LCS on tokens) ----------
+function diffWords(a, b) {
+  const tokenize = (s) => s.split(/(\s+|[.,;:!?()])/).filter(Boolean);
+  const A = tokenize(a), B = tokenize(b);
+  const dp = Array.from({ length: A.length + 1 }, () => new Uint16Array(B.length + 1));
+  for (let i = A.length - 1; i >= 0; i--)
+    for (let j = B.length - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  const push = (type, s) => { const last = out[out.length - 1]; last?.type === type ? (last.s += s) : out.push({ type, s }); };
+  while (i < A.length && j < B.length) {
+    if (A[i] === B[j]) { push("eq", A[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) push("del", A[i++]);
+    else push("ins", B[j++]);
+  }
+  while (i < A.length) push("del", A[i++]);
+  while (j < B.length) push("ins", B[j++]);
+  return out;
+}
+
+// Per-character marks for the page view: which original chars get replaced,
+// where pure insertions land, and which new chars were added.
+function diffMarks(orig, next) {
+  const oldMarks = [], newMarks = [], carets = new Set();
+  let a = 0, b = 0, prev = null;
+  for (const op of diffWords(orig, next)) {
+    const n = op.s.length;
+    if (op.type === "eq") { a += n; b += n; }
+    else if (op.type === "del") { for (let k = 0; k < n; k++) oldMarks[a + k] = "hl-old"; a += n; }
+    else { for (let k = 0; k < n; k++) newMarks[b + k] = "hl-new"; b += n; if (prev !== "del") carets.add(a); }
+    prev = op.type;
+  }
+  return { oldMarks, newMarks, carets };
+}
+
+// ---------- rendering ----------
+function el(tag, props = {}, ...children) {
+  const n = Object.assign(document.createElement(tag), props);
+  children.flat().forEach((c) => c != null && c !== false && n.append(c));
+  return n;
+}
+
+function appendStyledText(target, chars, marks = [], carets = new Set()) {
+  const key = (k) => `${chars[k].b}|${chars[k].i}|${chars[k].sz}|${marks[k] || ""}`;
+  let i = 0;
+  while (i <= chars.length) {
+    if (carets.has(i)) target.append(el("span", { className: "caret", title: "Text inserted here" }));
+    if (i === chars.length) break;
+    let j = i + 1;
+    while (j < chars.length && key(j) === key(i) && !carets.has(j)) j++;
+    const c = chars[i];
+    const span = el("span", { textContent: chars.slice(i, j).map((x) => x.ch).join(""), className: marks[i] || "" });
+    if (c.b) span.style.fontWeight = "700";
+    if (c.i) span.style.fontStyle = "italic";
+    if (c.sz) span.style.fontSize = `${c.sz}pt`;
+    target.append(span);
+    i = j;
+  }
+}
+
+// Unchanged words keep their original formatting. A word that replaces others takes
+// the formatting of the first word it replaces; a pure insertion takes the formatting
+// of the text just before it. The export uses the same mapping, so preview = download.
+function carryStyles(chars, next) {
+  const out = [];
+  const fallback = chars[0] || { b: false, i: false, sz: null, run: null };
+  let a = 0, prev = null, delStart = 0;
+  for (const op of diffWords(chars.map((c) => c.ch).join(""), next)) {
+    const n = op.s.length;
+    if (op.type === "eq") { for (let k = 0; k < n; k++) out.push(chars[a + k]); a += n; }
+    else if (op.type === "del") { delStart = a; a += n; }
+    else {
+      const src = prev === "del" ? chars[delStart] : out[out.length - 1] || chars[a] || fallback;
+      for (const ch of op.s) out.push({ ...src, ch });
+    }
+    prev = op.type;
+  }
+  return out;
+}
+
+function renderPageParagraph(i, para, c, number) {
+  const p = el("p", { className: `para ${para.kind}` });
+  p.dataset.i = i;
+  if (para.align) p.style.textAlign = para.align;
+  if (!c) { appendStyledText(p, para.chars); return p; }
+
+  p.classList.add("changed", c.status);
+  if (i === activeIndex) p.classList.add("active");
+  p.append(el("span", { className: "badge", textContent: number }));
+  if (c.status === "pending") {
+    const { oldMarks, carets } = diffMarks(para.text, c.suggested);
+    appendStyledText(p, para.chars, oldMarks, carets);
+  } else if (c.status === "rejected") {
+    appendStyledText(p, para.chars);
+  } else {
+    appendStyledText(p, carryStyles(para.chars, c.final), diffMarks(para.text, c.final).newMarks);
+  }
+  p.addEventListener("click", () => setActive(i, "callout"));
+  return p;
+}
+
+function renderCallout(i, para, c, number, inline) {
+  const box = el("div", { className: `callout ${c.status}${inline ? " inline" : ""}${i === activeIndex ? " active" : ""}` });
+  box.dataset.i = i;
+  box.addEventListener("click", (e) => { if (e.target.tagName !== "BUTTON" && e.target.tagName !== "TEXTAREA") setActive(i, "page"); });
+  const state = { pending: "Suggested", accepted: "Accepted", rejected: "Rejected", edited: "Your edit" }[c.status];
+  box.append(el("div", { className: "c-head" },
+    el("span", { className: "badge", textContent: number }),
+    el("span", { className: "tag", textContent: c.type }),
+    el("span", { className: "state", textContent: state })));
+
+  if (c.editing) {
+    const ta = el("textarea", { rows: Math.max(3, Math.ceil(c.final.length / 38)), value: c.final });
+    box.append(el("div", { className: "c-label", textContent: "Your version" }), ta,
+      el("div", { className: "c-actions" },
+        el("button", { className: "primary", textContent: "Save", onclick: () => { c.final = ta.value; c.status = ta.value === c.suggested ? "accepted" : "edited"; c.editing = false; render(); } }),
+        el("button", { textContent: "Cancel", onclick: () => { c.editing = false; render(); } })));
+    setTimeout(() => ta.focus());
+    return box;
+  }
+
+  const shown = c.status === "edited" ? c.final : c.suggested;
+  const label = { pending: "Change to", accepted: "Now reads", rejected: "Suggested (kept original)", edited: "Now reads (your edit)" }[c.status];
+  const text = el("div", { className: "c-text" });
+  diffWords(para.text, shown).forEach((d) => text.append(d.type === "eq" ? d.s : el(d.type, { textContent: d.s })));
+  box.append(el("div", { className: "c-label", textContent: label }), text,
+    el("div", { className: "c-reason", textContent: `Why: ${c.reason}` }),
+    el("div", { className: "c-actions" },
+      c.status !== "accepted" && el("button", { textContent: "Accept", onclick: () => { c.status = "accepted"; c.final = c.suggested; render(); } }),
+      c.status !== "rejected" && el("button", { textContent: "Reject", onclick: () => { c.status = "rejected"; render(); } }),
+      el("button", { textContent: "Edit", onclick: () => { c.editing = true; if (c.status !== "edited") c.final = c.suggested; render(); } })));
+  return box;
+}
+
+function render() {
+  const paper = $("paper"), rail = $("rail"), inline = narrow.matches;
+  $("review").classList.toggle("inline", inline);
+  paper.replaceChildren();
+  rail.replaceChildren();
+  if (!paragraphs.length) paper.append(el("div", { className: "empty", textContent: "Upload your CV to see it here." }));
+
+  let number = 0;
+  paragraphs.forEach((para, i) => {
+    const c = changes.get(i);
+    if (!c && !para.text.trim()) { paper.append(el("p", { className: "para" })); return; }
+    if (c) number++;
+    paper.append(renderPageParagraph(i, para, c, number));
+    if (c) (inline ? paper : rail).append(renderCallout(i, para, c, number, inline));
+  });
+
+  const all = [...changes.values()];
+  const count = (s) => all.filter((c) => c.status === s).length;
+  $("counts").textContent = all.length
+    ? `${all.length} suggestions · ${count("pending")} pending · ${count("accepted")} accepted · ${count("edited")} edited · ${count("rejected")} rejected`
+    : "No suggestions yet.";
+  $("acceptAll").disabled = !count("pending");
+  $("download").disabled = !zip;
+  requestAnimationFrame(layout);
+}
+
+// Sizes the page to whole A4 sheets, then places each callout level with its
+// paragraph (pushed down if it would overlap the one above) and draws a connector.
+function layout() {
+  const paper = $("paper"), rail = $("rail"), svg = $("links"), review = $("review");
+  const pageH = paper.clientWidth * A4_RATIO;
+  paper.style.setProperty("--page-h", `${pageH}px`);
+  paper.style.minHeight = "0px";
+  const pages = Math.max(1, Math.ceil((paper.scrollHeight - 2) / pageH));
+  paper.style.minHeight = `${pages * pageH - parseFloat(getComputedStyle(paper).getPropertyValue("--page-gap"))}px`;
+  if (zip && !narrow.matches) $("counts").textContent = $("counts").textContent.replace(/ · ≈.*$/, "") + ` · ≈ ${pages} A4 page${pages > 1 ? "s" : ""}`;
+
+  svg.replaceChildren();
+  rail.style.minHeight = "";
+  if (narrow.matches) return;
+  const rb = review.getBoundingClientRect(), pr = paper.getBoundingClientRect();
+  let bottom = -Infinity;
+  for (const co of rail.children) {
+    const target = paper.querySelector(`.para[data-i="${co.dataset.i}"]`);
+    const tr = target.getBoundingClientRect();
+    const top = Math.max(tr.top - rb.top, bottom + 10);
+    co.style.top = `${top}px`;
+    bottom = top + co.offsetHeight;
+
+    const y1 = tr.top - rb.top + 9, x1 = tr.right - rb.left + 4;
+    const xm = pr.right - rb.left + 10, x2 = rail.getBoundingClientRect().left - rb.left, y2 = top + 16;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", `M ${x1} ${y1} H ${xm} L ${x2} ${y2}`);
+    const status = [...co.classList].find((k) => STATUS_COLOR[k]);
+    path.setAttribute("stroke", `var(${STATUS_COLOR[status]})`);
+    if (co.dataset.i != activeIndex) path.setAttribute("stroke-dasharray", "4 3");
+    svg.append(path);
+  }
+  rail.style.minHeight = `${Math.max(0, bottom)}px`;
+}
+
+function setActive(i, scrollTo) {
+  activeIndex = i;
+  render();
+  requestAnimationFrame(() => {
+    const sel = scrollTo === "callout" && !narrow.matches ? `.callout[data-i="${i}"]` : `.para[data-i="${i}"]`;
+    document.querySelector(sel)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+}
+
+function setStatus(msg, isError = false) {
+  $("status").textContent = msg;
+  $("status").className = "status" + (isError ? " error" : "");
+}
+
+// ---------- Claude ----------
+const SYSTEM = `You are an expert CV editor. You tailor an existing CV to a specific job description with minor-to-medium edits only.
+
+Rules:
+- Only rephrase, reorder emphasis, or swap in the job's terminology for things the CV already shows. Never invent employers, titles, dates, numbers, certifications, tools or achievements that are not supported by the CV.
+- Keep the CV's language, spelling variant, tense and tone. Keep each rewritten paragraph roughly the same length (at most ~30% longer).
+- Prefer the highest-impact edits: the profile/summary, the most relevant roles' bullets, and skills lists. Typically 6–15 suggestions; fewer if the CV is already a strong match.
+- Leave headings, names, contact details, dates and paragraphs marked "locked" untouched.
+- At most one suggestion per paragraph. "new_text" is the complete replacement text for that paragraph (plain text; use \\t or \\n only if the original has them).
+- "reason" is one short sentence naming the job requirement the edit targets.`;
+
+const SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "suggestions"],
+  properties: {
+    summary: { type: "string", description: "2–3 sentences: how well the CV matches and what the edits emphasise." },
+    suggestions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["paragraph", "type", "new_text", "reason"],
+        properties: {
+          paragraph: { type: "integer", description: "The id of the paragraph to replace." },
+          type: { type: "string", enum: ["rewrite", "keywords", "emphasis"] },
+          new_text: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+async function analyze() {
+  const apiKey = $("apiKey").value.trim();
+  const jd = $("jd").value.trim();
+  if (!apiKey) return setStatus("Add your Anthropic API key first.", true);
+  if (!zip) return setStatus("Upload your CV first.", true);
+  if (!jd) return setStatus("Paste a job description first.", true);
+
+  const cv = paragraphs
+    .map((p, id) => ({ id, text: p.text, ...(p.locked && { locked: true }) }))
+    .filter((p) => p.text.trim());
+  const extra = $("extra").value.trim();
+  const prompt = `<job_description>\n${jd}\n</job_description>\n\n<cv_paragraphs>\n${JSON.stringify(cv, null, 1)}\n</cv_paragraphs>` +
+    (extra ? `\n\n<candidate_instructions>\n${extra}\n</candidate_instructions>` : "") +
+    `\n\nSuggest edits to this CV that highlight the candidate's real strengths for this job.`;
+
+  $("analyze").disabled = true;
+  const started = Date.now();
+  const timer = setInterval(() => setStatus(`Claude is reading your CV… ${Math.round((Date.now() - started) / 1000)}s`), 1000);
+  setStatus("Claude is reading your CV…");
+  try {
+    const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+    const message = await client.beta.messages.stream({
+      model: $("model").value,
+      max_tokens: 32000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high", format: { type: "json_schema", schema: SCHEMA } },
+      system: SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+    }).finalMessage();
+
+    if (message.stop_reason === "refusal") throw new Error("Claude declined this request.");
+    if (message.stop_reason === "max_tokens") throw new Error("The response was cut off. Try again, or shorten the job description.");
+    const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    const result = JSON.parse(text);
+
+    changes = new Map();
+    for (const s of result.suggestions) {
+      const para = paragraphs[s.paragraph];
+      if (!para || para.locked || !s.new_text.trim() || s.new_text === para.text || changes.has(s.paragraph)) continue;
+      changes.set(s.paragraph, { suggested: s.new_text, final: s.new_text, reason: s.reason, type: s.type, status: "pending" });
+    }
+    activeIndex = null;
+    $("summaryText").textContent = result.summary;
+    $("summary").hidden = false;
+    render();
+    setStatus(`Done in ${Math.round((Date.now() - started) / 1000)}s. Review the highlighted text and the comments beside it.`);
+    requestAnimationFrame(() => document.querySelector(".para.changed")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+  } catch (err) {
+    const msg = err instanceof Anthropic.AuthenticationError ? "Invalid API key."
+      : err instanceof Anthropic.RateLimitError ? "Rate limited — wait a moment and retry."
+      : err instanceof Anthropic.APIError ? `API error ${err.status ?? ""}: ${err.message}`
+      : err.message;
+    setStatus(msg, true);
+    console.error(err);
+  } finally {
+    clearInterval(timer);
+    $("analyze").disabled = false;
+  }
+}
+
+// ---------- wiring ----------
+function toBase64(buf) {
+  let s = ""; const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromBase64(b64) { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer; }
+
+$("apiKey").value = store.get(STORE.key) || "";
+$("model").value = store.get(STORE.model) || "claude-opus-5";
+$("apiKey").addEventListener("change", (e) => store.set(STORE.key, e.target.value.trim()));
+$("model").addEventListener("change", (e) => store.set(STORE.model, e.target.value));
+
+$("cvFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    await loadDocx(buf);
+    const saved = store.set(STORE.cv, toBase64(buf)) && store.set(STORE.cvName, file.name);
+    $("cvName").textContent = saved ? `${file.name} — saved in this browser.` : `${file.name} (too large to remember; re-upload next time).`;
+    setStatus("");
+  } catch (err) { setStatus(err.message, true); }
+});
+
+$("analyze").addEventListener("click", analyze);
+$("toggleInputs").addEventListener("click", () => {
+  const collapsed = $("app").classList.toggle("collapsed");
+  $("toggleInputs").textContent = collapsed ? "Show inputs" : "Hide inputs";
+});
+$("acceptAll").addEventListener("click", () => {
+  for (const c of changes.values()) if (c.status === "pending") { c.status = "accepted"; c.final = c.suggested; }
+  render();
+});
+$("download").addEventListener("click", async () => {
+  const blob = await buildDocx();
+  const base = (store.get(STORE.cvName) || "CV.docx").replace(/\.docx?$/i, "");
+  const a = el("a", { href: URL.createObjectURL(blob), download: `${base} - tailored.docx` });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+narrow.addEventListener("change", render);
+new ResizeObserver(() => requestAnimationFrame(layout)).observe($("review"));
+document.fonts?.ready.then(() => requestAnimationFrame(layout));
+
+const savedCv = store.get(STORE.cv);
+if (savedCv) {
+  loadDocx(fromBase64(savedCv))
+    .then(() => { $("cvName").textContent = `${store.get(STORE.cvName)} — loaded from this browser. Upload again to replace.`; })
+    .catch((err) => setStatus(err.message, true));
+}
+</script>
+</body>
+</html>
