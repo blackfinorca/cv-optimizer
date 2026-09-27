@@ -4,7 +4,7 @@ A single-page app that suggests small-to-medium edits to your CV so it matches a
 
 ## Run it
 
-Open `index.html` in a browser, or serve the folder if your browser blocks module scripts from `file://`:
+Open `index.html` in a browser (keep the `vendor/` folder next to it). If anything misbehaves, serve the folder instead:
 
 ```bash
 python3 -m http.server 8000   # then open http://localhost:8000
